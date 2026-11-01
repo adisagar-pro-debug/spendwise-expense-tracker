@@ -1,0 +1,17 @@
+{
+  "name": "Spendwise — Expense Tracker",
+  "short_name": "Spendwise",
+  "description": "A clear, private view of your spending. Parse bank statements, review categories, and sync across PC and phone.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8faf8",
+  "theme_color": "#142126",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

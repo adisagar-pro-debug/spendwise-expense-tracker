@@ -1,4 +1,4 @@
-export type Category =
+export type DefaultCategory =
   | 'Housing'
   | 'Groceries'
   | 'Dining'
@@ -13,6 +13,8 @@ export type Category =
   | 'Fees'
   | 'Other'
   | 'Unknown'
+
+export type Category = DefaultCategory | (string & {})
 
 export type ClassificationMethod = 'merchant rule' | 'saved correction' | 'manual' | 'unknown'
 
@@ -30,6 +32,9 @@ export interface Transaction {
   isDuplicate: boolean
   duplicateOf?: string
   duplicateConfirmedDistinct?: boolean
+  isSelfTransfer?: boolean
+  selfTransferPairId?: string
+  selfTransferConfirmedDistinct?: boolean
   directionChoice?: 'spending' | 'income'
   dateOrderChoice?: 'MDY' | 'DMY'
   isDemo?: boolean
@@ -79,6 +84,7 @@ export interface ParsedStatement {
   errors: string[]
   positiveAmountMode?: 'spending' | 'income'
   dateFormatMode?: 'MDY' | 'DMY'
+  bankName?: string
 }
 
 export interface CategoryResult {
@@ -90,4 +96,47 @@ export interface CategoryResult {
 
 export interface AnalyticsTransaction extends Transaction {
   amount: number
+}
+
+export interface SpendwiseSnapshot {
+  version: 1
+  updatedAt: string
+  currency: string
+  transactions: Transaction[]
+  statements: Statement[]
+  customCategories: string[]
+  disabledCategories: string[]
+  merchantCorrections: Record<string, Category>
+}
+
+export interface GoogleUserInfo {
+  email: string
+  name: string
+  picture?: string
+}
+
+export interface UserAccount {
+  id: string
+  name: string
+  email?: string
+  picture?: string
+  mode: 'google' | 'local' | 'demo'
+  createdAt: string
+  lastActiveAt: string
+}
+
+export interface UserSession {
+  mode: 'google' | 'local' | 'demo'
+  name: string
+  email?: string
+  picture?: string
+  accountId?: string
+}
+
+export interface DriveSyncStatus {
+  connected: boolean
+  syncing: boolean
+  user: GoogleUserInfo | null
+  lastSyncedAt: string | null
+  error?: string | null
 }
