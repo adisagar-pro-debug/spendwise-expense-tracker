@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
-import { AlertCircle, ArrowDownLeft, ArrowUpRight, Check, ChevronDown, FileSpreadsheet, FileText, LoaderCircle, ShieldCheck, Upload, X } from 'lucide-react'
-import { CATEGORIES, saveMerchantCorrection } from '../lib/categories'
+import { AlertCircle, ArrowDownLeft, ArrowUpRight, BadgeCheck, Check, ChevronDown, FileSpreadsheet, FileText, Info, LoaderCircle, Upload, X } from 'lucide-react'
+import { getAllCategories, saveMerchantCorrection } from '../lib/categories'
 import { formatMoney, formatDate } from '../lib/format'
 import type { Category, ParsedStatement, StagedTransaction } from '../types'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 
 interface UploadDialogProps {
   open: boolean
@@ -59,7 +60,6 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
 
   const readyFiles = files.filter((file) => file.transactions.length > 0)
   const transactionCount = readyFiles.reduce((total, file) => total + file.transactions.length, 0)
-  const hasUnsupportedFile = files.some((file) => file.errors.length > 0)
 
   const updateCategory = (fileId: string, transactionId: string, category: Category) => {
     const merchant = files.find((file) => file.id === fileId)?.transactions.find((transaction) => transaction.id === transactionId)?.merchant
@@ -132,11 +132,7 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="import-dialog" aria-labelledby="import-title" role="dialog" aria-modal="true">
         <header className="dialog-header">
-          <div>
-            <div className="eyebrow eyebrow-green">STATEMENT IMPORT</div>
-            <h2 id="import-title">Bring your spending into focus</h2>
-            <p>Choose one or more files. Nothing is sent to a server.</p>
-          </div>
+          <h2 id="import-title">Import Statements</h2>
           <button className="icon-button close-button" aria-label="Close import dialog" onClick={onClose}><X size={18} /></button>
         </header>
 
@@ -147,10 +143,10 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
           onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false) }}
           onDrop={dropFiles}
         >
-          <div className="drop-icon"><Upload size={21} /></div>
+          <div className="drop-icon"><Upload size={20} /></div>
           <div className="drop-copy">
-            <strong>Drop your statements here</strong>
-            <span>CSV, TSV, XLS, XLSX, or text-based PDF · up to 20 MB each · PDF up to 200 pages</span>
+            <strong>Drop files here or browse</strong>
+            <span>CSV, Excel, or PDF</span>
           </div>
           <button className="button button-secondary button-small" onClick={() => inputRef.current?.click()} disabled={reading}>Browse files</button>
           <input
@@ -166,9 +162,7 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
           />
         </div>
 
-        <div className="privacy-inline"><ShieldCheck size={14} /> Files are parsed in this tab and are never uploaded or stored. Statement currency metadata is used when detected; otherwise unmarked amounts default to {defaultCurrency}.</div>
-
-        {reading && <div className="parsing-state"><LoaderCircle className="spin" size={17} /> Reading statements in your browser…</div>}
+        {reading && <div className="parsing-state"><LoaderCircle className="spin" size={17} /> Reading statements…</div>}
         {loadError && <div className="import-error-message import-loader-error"><AlertCircle size={14} />{loadError}</div>}
 
         {files.length > 0 && (
@@ -194,12 +188,64 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
                 </div>
 
                 {file.errors.map((error) => <div className="import-error-message" key={error}><AlertCircle size={14} />{error}</div>)}
-                {file.warnings.map((warning) => <div className="import-warning-message" key={warning}><AlertCircle size={14} />{warning}</div>)}
+                {(() => {
+                  const isActionable = (w: string) => /could not be parsed|skipped|had values in both debit and credit|unmarked positive/i.test(w)
+                  const actionableWarnings = file.warnings.filter(isActionable)
+                  const infoNotes = file.warnings.filter((w) => !isActionable(w))
+
+                  return (
+                    <>
+                      {actionableWarnings.map((warning) => (
+                        <div className="import-warning-message" key={warning}><AlertCircle size={14} />{warning}</div>
+                      ))}
+
+                      {!file.errors.length && !actionableWarnings.length && file.transactions.length > 0 && (
+                        <div className="import-success-message">
+                          <BadgeCheck size={14} />
+                          <span>All <strong>{file.transactions.length}</strong> transactions extracted cleanly ({file.bankName ?? 'Bank Statement'} · {file.transactions[0]?.currencyCode ?? 'INR'})</span>
+                        </div>
+                      )}
+
+                      {infoNotes.length > 0 && (
+                        <details className="import-info-details">
+                          <summary><Info size={12} /> Extraction notes ({infoNotes.length})</summary>
+                          <ul>
+                            {infoNotes.map((note) => (
+                              <li key={note}>{note}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+                    </>
+                  )
+                })()}
                 {file.transactions.some((row) => row.directionAmbiguous) && (
-                  <label className="convention-control"><span><strong>Unmarked positive amounts</strong><small>Some rows have no debit/credit clue. Choose how to count them.</small></span><select value={file.positiveAmountMode ?? 'spending'} onChange={(event) => updateAmountMode(file.id, event.target.value as 'spending' | 'income')}><option value="spending">Treat as spending</option><option value="income">Treat as income</option></select></label>
+                  <div className="convention-control">
+                    <span><strong>Unmarked positive amounts</strong><small>Some rows have no debit/credit clue. Choose how to count them.</small></span>
+                    <Select value={file.positiveAmountMode ?? 'spending'} onValueChange={(val) => updateAmountMode(file.id, val as 'spending' | 'income')}>
+                      <SelectTrigger className="shadcn-dialog-trigger">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="spending">Treat as spending</SelectItem>
+                        <SelectItem value="income">Treat as income</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 )}
                 {file.transactions.some((row) => row.dateAmbiguous) && (
-                  <label className="convention-control"><span><strong>Ambiguous numeric dates</strong><small>For dates like 04/05, choose your bank's order.</small></span><select value={file.dateFormatMode ?? 'MDY'} onChange={(event) => updateDateMode(file.id, event.target.value as 'MDY' | 'DMY')}><option value="MDY">MM/DD/YYYY</option><option value="DMY">DD/MM/YYYY</option></select></label>
+                  <div className="convention-control">
+                    <span><strong>Ambiguous numeric dates</strong><small>For dates like 04/05, choose your bank's order.</small></span>
+                    <Select value={file.dateFormatMode ?? 'MDY'} onValueChange={(val) => updateDateMode(file.id, val as 'MDY' | 'DMY')}>
+                      <SelectTrigger className="shadcn-dialog-trigger">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MDY">MM/DD/YYYY</SelectItem>
+                        <SelectItem value="DMY">DD/MM/YYYY</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 )}
                 {file.transactions.length > 0 && (
                   <details className="preview-details">
@@ -213,14 +259,24 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
                               <td>{formatDate(transaction.date)}</td>
                               <td className="preview-description" title={transaction.description}>{transaction.description}{transaction.issue && <span className="row-issue preview-row-issue" title={transaction.issue}><AlertCircle size={11} /> Check</span>}</td>
                               <td>
-                                <select
-                                  aria-label={`Category for ${transaction.description}`}
-                                  className={`category-select ${transaction.category === 'Unknown' ? 'category-select-unknown' : ''}`}
+                                <Select
                                   value={transaction.category}
-                                  onChange={(event) => updateCategory(file.id, transaction.id, event.target.value as Category)}
+                                  onValueChange={(val) => updateCategory(file.id, transaction.id, val as Category)}
                                 >
-                                  {CATEGORIES.map((category) => <option value={category} key={category}>{category}</option>)}
-                                </select>
+                                  <SelectTrigger
+                                    className={`shadcn-category-trigger ${transaction.category === 'Unknown' ? 'category-select-unknown' : ''}`}
+                                    aria-label={`Category for ${transaction.description}`}
+                                  >
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectGroup>
+                                      {getAllCategories().map((category) => (
+                                        <SelectItem key={category} value={category}>{category}</SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
                               </td>
                               <td className={`align-right amount-cell ${transaction.amount > 0 ? 'amount-in' : ''}`}>{transaction.amount > 0 ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}{formatMoney(transaction.amount, transaction.currencyCode || defaultCurrency)}</td>
                             </tr>
@@ -230,7 +286,7 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
                       {file.transactions.length > 6 && <div className="preview-more">+ {file.transactions.length - 6} more transaction rows</div>}
                     </div>
                     {file.transactions.some((row) => row.issue) && (
-                      <p className="preview-issue-note"><AlertCircle size={13} /> Some rows need a closer look. The importer marked them before they enter your totals.</p>
+                      <p className="preview-issue-note"><AlertCircle size={13} /> Flagged rows need review before import.</p>
                     )}
                   </details>
                 )}
@@ -240,15 +296,14 @@ export default function UploadDialog({ open, defaultCurrency, onClose, onImport 
         )}
 
         <footer className="dialog-footer">
-          <span>{files.length > 0 ? `${transactionCount} rows · ${readyFiles.length} file${readyFiles.length === 1 ? '' : 's'} ready${hasUnsupportedFile ? ' · some files need attention' : ''}` : 'No statement files selected yet'}</span>
+          <span>{files.length > 0 ? `${transactionCount} rows across ${readyFiles.length} file${readyFiles.length === 1 ? '' : 's'}` : ''}</span>
           <div className="dialog-actions">
             <button className="button button-quiet" onClick={onClose}>Cancel</button>
             <button className="button button-primary" disabled={!readyFiles.length || reading} onClick={commitImport}>
-              Import {transactionCount || ''} transactions <ArrowUpRight size={15} />
+              Import{transactionCount > 0 ? ` ${transactionCount} rows` : ''} <ArrowUpRight size={15} />
             </button>
           </div>
         </footer>
-        <p className="dialog-footnote"><ShieldCheck size={12} /> Unclassified merchants remain Unknown until you assign a category.</p>
       </section>
     </div>
   )

@@ -1,4 +1,5 @@
-import { BarChart3, CircleHelp, FileStack, LayoutDashboard, ListFilter, LockKeyhole, Settings2 } from 'lucide-react'
+import { Download, FileStack, LayoutDashboard, ListFilter, LockKeyhole, LogOut, Settings2 } from 'lucide-react'
+import type { UserSession } from './WelcomeLogin'
 
 export type PageKey = 'overview' | 'transactions' | 'statements' | 'settings'
 
@@ -7,6 +8,10 @@ interface SidebarProps {
   onNavigate: (page: PageKey) => void
   unknownCount: number
   statementCount: number
+  userSession?: UserSession | null
+  onLogout?: () => void
+  canInstallPwa?: boolean
+  onInstallPwa?: () => void
 }
 
 const navigation: Array<{ key: PageKey; label: string; icon: typeof LayoutDashboard }> = [
@@ -16,7 +21,20 @@ const navigation: Array<{ key: PageKey; label: string; icon: typeof LayoutDashbo
   { key: 'settings', label: 'Preferences', icon: Settings2 },
 ]
 
-export default function Sidebar({ activePage, onNavigate, unknownCount, statementCount }: SidebarProps) {
+export default function Sidebar({
+  activePage,
+  onNavigate,
+  unknownCount,
+  statementCount,
+  userSession,
+  onLogout,
+  canInstallPwa,
+  onInstallPwa,
+}: SidebarProps) {
+  const displayName = userSession?.name || 'Alex'
+  const displayEmail = userSession?.email || (userSession?.mode === 'google' ? 'Google Account' : 'Personal workspace')
+  const initial = displayName.charAt(0).toUpperCase() || 'A'
+
   return (
     <aside className="sidebar">
       <button className="brand-lockup" onClick={() => onNavigate('overview')} aria-label="Spendwise overview">
@@ -25,8 +43,15 @@ export default function Sidebar({ activePage, onNavigate, unknownCount, statemen
       </button>
 
       <div className="workspace-switcher">
-        <div className="workspace-avatar">A</div>
-        <div className="workspace-text"><span>Personal space</span><strong>Alex's finances</strong></div>
+        {userSession?.picture ? (
+          <img src={userSession.picture} alt="" className="workspace-avatar-img" />
+        ) : (
+          <div className="workspace-avatar">{initial}</div>
+        )}
+        <div className="workspace-text">
+          <span>{userSession?.mode === 'google' ? 'Google Drive space' : 'Personal space'}</span>
+          <strong>{displayName}’s finances</strong>
+        </div>
         <span className="workspace-dot" />
       </div>
 
@@ -44,16 +69,44 @@ export default function Sidebar({ activePage, onNavigate, unknownCount, statemen
         })}
       </nav>
 
+      {canInstallPwa && onInstallPwa && (
+        <button
+          type="button"
+          className="sidebar-pwa-install-btn"
+          onClick={onInstallPwa}
+          title="Install Spendwise as a desktop or mobile application"
+        >
+          <Download size={15} />
+          <span>Install Spendwise App</span>
+        </button>
+      )}
+
       <div className="sidebar-bottom">
-        <div className="side-help"><CircleHelp size={16} /><span>Help center</span></div>
-        <div className="privacy-card">
-          <span className="privacy-icon"><LockKeyhole size={15} /></span>
-          <div><strong>Private, by design</strong><span>Your statements stay on this device.</span></div>
+        <div className="sidebar-storage-badge" title={userSession?.mode === 'google' ? 'Google Drive sync active' : 'Stored locally in browser IndexedDB'}>
+          <LockKeyhole size={12} />
+          <span>{userSession?.mode === 'google' ? 'Google Drive' : 'Local Storage'}</span>
         </div>
         <div className="sidebar-profile">
-          <div className="profile-avatar">A</div>
-          <div className="profile-copy"><strong>Alex Morgan</strong><span>Personal account</span></div>
-          <BarChart3 size={16} className="profile-mark" />
+          {userSession?.picture ? (
+            <img src={userSession.picture} alt="" className="profile-avatar-img" />
+          ) : (
+            <div className="profile-avatar">{initial}</div>
+          )}
+          <div className="profile-copy">
+            <strong>{displayName}</strong>
+            <span title={displayEmail}>{displayEmail}</span>
+          </div>
+          {onLogout && (
+            <button
+              type="button"
+              className="profile-logout-btn"
+              onClick={onLogout}
+              title="Sign out / switch workspace profile"
+              aria-label="Sign out"
+            >
+              <LogOut size={15} />
+            </button>
+          )}
         </div>
       </div>
     </aside>

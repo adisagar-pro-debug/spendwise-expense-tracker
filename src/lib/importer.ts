@@ -307,6 +307,7 @@ interface PdfTextPart {
   x: number
   y: number
   text: string
+  width?: number
 }
 
 interface PdfTextLine {
@@ -317,21 +318,26 @@ interface PdfTextLine {
 
 interface PdfPageText {
   lines: PdfTextLine[]
-  columns: PdfTableColumns | null
+  columns: PdfTableColumnBounds | null
 }
 
-interface PdfTableColumns {
-  dateX: number
-  narrationX: number
-  referenceX: number
-  valueDateX: number
-  withdrawalX: number
-  depositX: number
-  balanceX: number
+export interface PdfTableColumnBounds {
+  dateStart: number
+  dateEnd: number
+  descriptionStart: number
+  descriptionEnd: number
+  withdrawalStart?: number
+  withdrawalEnd?: number
+  depositStart?: number
+  depositEnd?: number
+  amountStart?: number
+  amountEnd?: number
+  balanceStart?: number
+  balanceEnd?: number
 }
 
 function pdfLineItems(items: unknown[]): PdfTextLine[] {
-  const textItems = items.filter((item): item is { str: string; transform: number[] } => {
+  const textItems = items.filter((item): item is { str: string; transform: number[]; width?: number } => {
     return Boolean(item && typeof item === 'object' && 'str' in item && 'transform' in item && String((item as { str?: unknown }).str ?? '').trim())
   })
   const sorted = textItems.sort((a, b) => {
@@ -343,7 +349,12 @@ function pdfLineItems(items: unknown[]): PdfTextLine[] {
     const y = item.transform[5] ?? 0
     const last = lines[lines.length - 1]
     if (!last || Math.abs(last.y - y) > 2.25) lines.push({ y, parts: [] })
-    lines[lines.length - 1].parts.push({ x: item.transform[4] ?? 0, y, text: item.str.trim() })
+    lines[lines.length - 1].parts.push({
+      x: item.transform[4] ?? 0,
+      y,
+      text: item.str.trim(),
+      width: typeof item.width === 'number' ? item.width : 25,
+    })
   }
   return lines.map((line) => {
     const parts = line.parts.sort((a, b) => a.x - b.x)
@@ -355,26 +366,157 @@ const monthPattern = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Ju
 const pdfDateStart = new RegExp(`^(?:\\d{1,2}[/.\\-]\\d{1,2}[/.\\-]\\d{2,4}|${monthPattern}\\s+\\d{1,2},?\\s+\\d{2,4}|\\d{1,2}\\s+${monthPattern}\\s+\\d{2,4})\\b`, 'i')
 const pdfMoney = /(?:\(\s*)?[-+]?(?:USD|EUR|GBP|INR|CAD|AUD|\$|€|£|₹|¥)?\s*\d[\d,]*(?:\.\d{2})?(?:\s*\))?/gi
 
-function detectPdfTableColumns(lines: PdfTextLine[]): PdfTableColumns | null {
-  for (const line of lines) {
-    const labels = line.parts.map((part) => ({ x: part.x, text: part.text.toLowerCase().replace(/\s+/g, ' ').trim() }))
-    const date = labels.find((part) => part.text === 'date')
-    const narration = labels.find((part) => part.text.includes('narration'))
-    const reference = labels.find((part) => part.text.includes('ref') && part.text.includes('no'))
-    const valueDate = labels.find((part) => part.text.includes('value') && part.text.includes('date'))
-    const withdrawal = labels.find((part) => part.text.includes('withdrawal') && part.text.includes('amount'))
-    const deposit = labels.find((part) => part.text.includes('deposit') && part.text.includes('amount'))
-    const balance = labels.find((part) => part.text.includes('balance'))
-    if (date && narration && reference && valueDate && withdrawal && deposit && balance) {
-      return {
-        dateX: date.x,
-        narrationX: narration.x,
-        referenceX: reference.x,
-        valueDateX: valueDate.x,
-        withdrawalX: withdrawal.x,
-        depositX: deposit.x,
-        balanceX: balance.x,
+function cleanHeaderPart(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function isDateColumnLabel(text: string): boolean {
+  const c = cleanHeaderPart(text)
+  return /^(txn\s*date|trans(action)?\s*date|date|posting\s*date|posted\s*date|value\s*date)$/.test(c)
+}
+
+function isDescColumnLabel(text: string): boolean {
+  const c = cleanHeaderPart(text)
+  return /^(narration|particulars|description|details|transaction\s*details|memo|payee|merchant)$/.test(c)
+}
+
+function isDebitColumnLabel(text: string): boolean {
+  const c = cleanHeaderPart(text)
+  return /^(withdrawal(\s*amount)?|debit(\s*amount)?|dr(\s*amount)?|money\s*out|outflow)$/.test(c)
+}
+
+function isCreditColumnLabel(text: string): boolean {
+  const c = cleanHeaderPart(text)
+  return /^(deposit(\s*amount)?|credit(\s*amount)?|cr(\s*amount)?|money\s*in|inflow)$/.test(c)
+}
+
+function isBalanceColumnLabel(text: string): boolean {
+  const c = cleanHeaderPart(text)
+  return /^(closing\s*balance|balance|running\s*balance|available\s*balance)$/.test(c)
+}
+
+function isAmountColumnLabel(text: string): boolean {
+  const c = cleanHeaderPart(text)
+  return /^(amount|transaction\s*amount|value)$/.test(c)
+}
+
+function testHeaderParts(parts: Array<{ x: number; text: string; width?: number }>): PdfTableColumnBounds | null {
+  const primaryDate = parts.find((p) => /^(txn\s*date|trans(action)?\s*date|date)/i.test(cleanHeaderPart(p.text))) ?? parts.find((p) => isDateColumnLabel(p.text))
+  const primaryDesc = parts.find((p) => isDescColumnLabel(p.text))
+  const debitPart = parts.find((p) => isDebitColumnLabel(p.text))
+  const creditPart = parts.find((p) => isCreditColumnLabel(p.text))
+  const balancePart = parts.find((p) => isBalanceColumnLabel(p.text))
+  const amountPart = parts.find((p) => isAmountColumnLabel(p.text))
+
+  if (!primaryDate || !primaryDesc) return null
+  if (!debitPart && !creditPart && !amountPart) return null
+
+  type ColType = 'date' | 'description' | 'debit' | 'credit' | 'balance' | 'amount' | 'other'
+  const colList: Array<{ type: ColType; x: number; width: number; endX: number }> = []
+
+  for (const part of parts) {
+    const w = part.width || 25
+    const endX = part.x + w
+    if (part === primaryDate) colList.push({ type: 'date', x: part.x, width: w, endX })
+    else if (part === primaryDesc) colList.push({ type: 'description', x: part.x, width: w, endX })
+    else if (part === debitPart) colList.push({ type: 'debit', x: part.x, width: w, endX })
+    else if (part === creditPart) colList.push({ type: 'credit', x: part.x, width: w, endX })
+    else if (part === balancePart) colList.push({ type: 'balance', x: part.x, width: w, endX })
+    else if (part === amountPart) colList.push({ type: 'amount', x: part.x, width: w, endX })
+    else colList.push({ type: 'other', x: part.x, width: w, endX })
+  }
+
+  colList.sort((a, b) => a.x - b.x)
+
+  const bounds: Partial<PdfTableColumnBounds> = {}
+  for (let idx = 0; idx < colList.length; idx++) {
+    const col = colList[idx]
+    const prev = colList[idx - 1]
+    const next = colList[idx + 1]
+
+    let startX = 0
+    let endX = 9999
+
+    if (col.type === 'description') {
+      startX = prev ? Math.min(prev.endX + 4, (prev.x + col.x) / 2) : 0
+      endX = next ? next.x - 4 : 9999
+    } else if (col.type === 'date') {
+      startX = idx === 0 ? 0 : (prev.x + col.x) / 2
+      endX = next ? Math.min(next.x - 4, (col.endX + next.x) / 2) : 9999
+    } else {
+      startX = prev ? (prev.type === 'description' ? prev.x + (col.x - prev.x) * 0.7 : (prev.x + col.x) / 2) : 0
+      endX = next ? (col.x + next.x) / 2 : 9999
+    }
+
+    if (col.type === 'date' && bounds.dateStart === undefined) {
+      bounds.dateStart = startX
+      bounds.dateEnd = endX
+    } else if (col.type === 'description' && bounds.descriptionStart === undefined) {
+      bounds.descriptionStart = startX
+      bounds.descriptionEnd = endX
+    } else if (col.type === 'debit' && bounds.withdrawalStart === undefined) {
+      bounds.withdrawalStart = startX
+      bounds.withdrawalEnd = endX
+    } else if (col.type === 'credit' && bounds.depositStart === undefined) {
+      bounds.depositStart = startX
+      bounds.depositEnd = endX
+    } else if (col.type === 'balance' && bounds.balanceStart === undefined) {
+      bounds.balanceStart = startX
+      bounds.balanceEnd = endX
+    } else if (col.type === 'amount' && bounds.amountStart === undefined) {
+      bounds.amountStart = startX
+      bounds.amountEnd = endX
+    }
+  }
+
+  if (
+    bounds.dateStart !== undefined
+    && bounds.descriptionStart !== undefined
+    && (bounds.withdrawalStart !== undefined || bounds.depositStart !== undefined || bounds.amountStart !== undefined)
+  ) {
+    return {
+      dateStart: bounds.dateStart,
+      dateEnd: bounds.dateEnd!,
+      descriptionStart: bounds.descriptionStart,
+      descriptionEnd: bounds.descriptionEnd!,
+      withdrawalStart: bounds.withdrawalStart,
+      withdrawalEnd: bounds.withdrawalEnd,
+      depositStart: bounds.depositStart,
+      depositEnd: bounds.depositEnd,
+      amountStart: bounds.amountStart,
+      amountEnd: bounds.amountEnd,
+      balanceStart: bounds.balanceStart,
+      balanceEnd: bounds.balanceEnd,
+    }
+  }
+
+  return null
+}
+
+function detectPdfTableColumns(lines: PdfTextLine[]): PdfTableColumnBounds | null {
+  for (let i = 0; i < Math.min(lines.length, 30); i++) {
+    const l1 = lines[i]
+    const l2 = lines[i + 1]
+
+    // Test single line
+    const singleBounds = testHeaderParts(l1.parts)
+    if (singleBounds) return singleBounds
+
+    // Test merged two-line header (e.g. Txn / Date, Brn / Code, Ref / No)
+    if (l2 && Math.abs(l1.y - l2.y) < 18) {
+      const mergedParts: Array<{ x: number; text: string; width?: number }> = []
+      const allParts = [...l1.parts, ...l2.parts].sort((a, b) => a.x - b.x)
+      for (const part of allParts) {
+        const existing = mergedParts.find((m) => Math.abs(m.x - part.x) < 25)
+        if (existing) {
+          existing.text = `${existing.text} ${part.text}`.trim()
+          existing.width = Math.max(existing.width ?? 0, (part.x + (part.width || 0)) - existing.x)
+        } else {
+          mergedParts.push({ x: part.x, text: part.text, width: part.width || 25 })
+        }
       }
+      const mergedBounds = testHeaderParts(mergedParts)
+      if (mergedBounds) return mergedBounds
     }
   }
   return null
@@ -389,13 +531,26 @@ function pdfTextInColumn(line: PdfTextLine, startX: number, endX: number): strin
     .trim()
 }
 
-function detectPdfCurrency(lines: PdfTextLine[]): string | null {
+function detectPdfCurrency(lines: PdfTextLine[], bankName?: string | null): string | null {
   const codePattern = '(USD|EUR|GBP|INR|CAD|AUD|NZD|JPY|CHF|SGD|HKD|AED|ZAR|MXN)'
   const labeledCurrency = new RegExp(`\\b(?:account\\s+)?currency(?:\\s+code)?\\b\\s*[:\\-]?\\s*${codePattern}\\b`, 'i')
   for (const line of lines) {
     const match = line.text.match(labeledCurrency)
     if (match) return currencyCodeFrom(match[1])
   }
+
+  // Check for Indian bank, IFSC code, UPI, Indian lakh formatting, or Rupee symbols
+  const allText = lines.slice(0, 100).map((l) => l.text).join(' ')
+  const isIndianBank = bankName && /karur vysya|hdfc|state bank|sbi|icici|axis|kotak|baroda|punjab national|pnb|canara|union bank|idbi|indian bank/i.test(bankName)
+  const hasIndianClues = /\b(IFSC|MICR|UPI[-/]|NEFT|IMPS|RTGS|KVBL|HDFC|SBIN|ICIC|UTIB|BARB0|PUNB|CNRB)\b/i.test(allText)
+    || /\b\d{1,2},\d{2},\d{3}(?:\.\d{2})?\b/.test(allText)
+    || /\b(Tamil Nadu|Chennai|Mumbai|Delhi|Bengaluru|Bangalore|Kolkata|Hyderabad|Pune|Ahmedabad)\b/i.test(allText)
+    || /\b(?:Rs\.?|INR|₹)\b/i.test(allText)
+
+  if (isIndianBank || hasIndianClues) {
+    return 'INR'
+  }
+
   return null
 }
 
@@ -428,31 +583,32 @@ function parseColumnPdf(
   for (const page of pages) {
     const columns = page.columns
     if (!columns) continue
-    const dateEnd = (columns.dateX + columns.narrationX) / 2
-    const descriptionStart = columns.narrationX - 3
-    const descriptionEnd = columns.referenceX - 3
-    const withdrawalStart = (columns.valueDateX + columns.withdrawalX) / 2
-    const withdrawalEnd = (columns.withdrawalX + columns.depositX) / 2
-    const depositStart = withdrawalEnd
-    const depositEnd = (columns.depositX + columns.balanceX) / 2
+    const dateStart = columns.dateStart
+    const dateEnd = columns.dateEnd
+    const descriptionStart = columns.descriptionStart
+    const descriptionEnd = columns.descriptionEnd
+
     const datedLines = page.lines.flatMap((line, index) => {
-      const dateCell = line.parts.find((part) => part.x >= columns.dateX - 3 && part.x < dateEnd && pdfDateStart.test(part.text))
+      const dateCell = line.parts.find((part) => part.x >= dateStart - 8 && part.x < dateEnd + 8 && pdfDateStart.test(part.text))
       const dateMatch = dateCell?.text.match(pdfDateStart)
       return dateMatch ? [{ line, index, originalDate: dateMatch[0].trim() }] : []
     })
 
     for (const [rowIndex, dated] of datedLines.entries()) {
       const { line, originalDate } = dated
-      dateValues.push(originalDate)
 
-      const withdrawal = parseAmount(pdfTextInColumn(line, withdrawalStart, withdrawalEnd))
-      const deposit = parseAmount(pdfTextInColumn(line, depositStart, depositEnd))
+      const withdrawal = columns.withdrawalStart !== undefined && columns.withdrawalEnd !== undefined
+        ? parseAmount(pdfTextInColumn(line, columns.withdrawalStart, columns.withdrawalEnd))
+        : null
+      const deposit = columns.depositStart !== undefined && columns.depositEnd !== undefined
+        ? parseAmount(pdfTextInColumn(line, columns.depositStart, columns.depositEnd))
+        : null
+      const amountSingle = columns.amountStart !== undefined && columns.amountEnd !== undefined
+        ? parseAmount(pdfTextInColumn(line, columns.amountStart, columns.amountEnd))
+        : null
+
       const withdrawalAmount = Math.abs(withdrawal?.value ?? 0)
       const depositAmount = Math.abs(deposit?.value ?? 0)
-      if (withdrawalAmount === 0 && depositAmount === 0) {
-        skippedRows += 1
-        continue
-      }
 
       const previousDateY = datedLines[rowIndex - 1]?.line.y ?? Number.POSITIVE_INFINITY
       const nextDateY = datedLines[rowIndex + 1]?.line.y ?? Number.NEGATIVE_INFINITY
@@ -469,13 +625,35 @@ function parseColumnPdf(
         .sort((a, b) => b.y - a.y)
       const description = narrationLines.map((candidate) => candidate.text).join(' ').replace(/[|•]+/g, ' ').replace(/\s+/g, ' ').trim()
 
+      const isBalanceSummary = /^(?:opening balance|closing balance|beginning balance|ending balance|balance b\/f|b\/f\b|b\/f\.\.\.|total)/i.test(description)
+      if (isBalanceSummary) {
+        continue
+      }
+
+      if (!description) {
+        skippedRows += 1
+        continue
+      }
+
+      if (withdrawalAmount === 0 && depositAmount === 0 && (!amountSingle || amountSingle.value === 0)) {
+        continue
+      }
+
+      dateValues.push(originalDate)
+
+      let amount = depositAmount - withdrawalAmount
+      if (amount === 0 && amountSingle) {
+        const dir = getDirection(description)
+        amount = amountSingle.value < 0 ? amountSingle.value : dir === 'credit' ? amountSingle.value : -Math.abs(amountSingle.value)
+      }
+
       const bothSides = withdrawalAmount > 0 && depositAmount > 0
       if (bothSides) bothSideRows += 1
       rawRows.push({
         originalDate,
         description: description || 'Unlabeled transaction',
-        amount: depositAmount - withdrawalAmount,
-        currencyCode: withdrawal?.currencyCode ?? deposit?.currencyCode ?? detectedCurrency ?? defaultCurrency,
+        amount,
+        currencyCode: withdrawal?.currencyCode ?? deposit?.currencyCode ?? amountSingle?.currencyCode ?? detectedCurrency ?? defaultCurrency,
         issue: [
           bothSides ? 'Both withdrawal and deposit columns contain values; the displayed amount is their net. Verify this row.' : undefined,
           !description ? 'A dated transaction amount was retained but no narration could be associated; review the source statement.' : undefined,
@@ -484,7 +662,7 @@ function parseColumnPdf(
     }
   }
 
-  const dateFormatMode = inferredPdfDateOrder(dateValues)
+  const dateFormatMode = inferredPdfDateOrder(dateValues) ?? (detectedCurrency === 'INR' ? 'DMY' : undefined)
   const ambiguousDateRows = dateValues.filter(isAmbiguousNumericDate).length
   const inferredDayFirstRows = dateValues.filter(isUnambiguousDayFirstDate).length
   const transactions: StagedTransaction[] = []
@@ -516,7 +694,10 @@ function parseColumnPdf(
     'PDFs are parsed from embedded text only. Scanned/image-only pages cannot be read; review every extracted row against the source statement.',
     'Debit and credit values were read from their labeled columns; the running balance was not treated as a transaction amount.',
   ]
-  if (detectedCurrency) warnings.push(`Statement currency ${detectedCurrency} was detected from its labeled currency field and applied to amounts without an explicit symbol.`)
+  if (detectedCurrency) {
+    const evidence = detectedCurrency === 'INR' ? 'statement metadata / bank identifiers' : 'its labeled currency field'
+    warnings.push(`Statement currency ${detectedCurrency} was detected from ${evidence} and applied to amounts without an explicit symbol.`)
+  }
   if (ambiguousDateRows) {
     const format = dateFormatMode === 'DMY' ? 'DD/MM/YYYY' : 'MM/DD/YYYY'
     const evidence = dateFormatMode ? 'based on unambiguous dates elsewhere in the statement' : 'because no unambiguous date-order evidence was found'
@@ -596,7 +777,10 @@ function parseUnstructuredPdf(
   const warnings = [
     'PDFs are parsed from embedded text only. Scanned/image-only pages cannot be read; review every extracted row against the source statement.',
   ]
-  if (detectedCurrency) warnings.push(`Statement currency ${detectedCurrency} was detected from its labeled currency field and applied to amounts without an explicit symbol.`)
+  if (detectedCurrency) {
+    const evidence = detectedCurrency === 'INR' ? 'statement metadata / bank identifiers' : 'its labeled currency field'
+    warnings.push(`Statement currency ${detectedCurrency} was detected from ${evidence} and applied to amounts without an explicit symbol.`)
+  }
   if (ambiguousDirectionRows) warnings.push(`${ambiguousDirectionRows} positive PDF amount${ambiguousDirectionRows === 1 ? '' : 's'} lacked a direction clue and default to spending; choose their direction in the preview.`)
   if (ambiguousDateRows) warnings.push('Ambiguous numeric PDF dates default to MM/DD/YYYY. Choose MM/DD or DD/MM in the preview if your bank uses a day-first format.')
   if (inferredDayFirstRows) warnings.push(`${inferredDayFirstRows} numeric PDF date${inferredDayFirstRows === 1 ? '' : 's'} beginning with a day greater than 12 were interpreted as DD/MM/YYYY.`)
@@ -609,6 +793,25 @@ function parseUnstructuredPdf(
   }
 }
 
+function detectPdfBankName(lines: PdfTextLine[]): string | null {
+  for (const line of lines.slice(0, 35)) {
+    const text = line.text.toLowerCase()
+    if (text.includes('hdfc bank')) return 'HDFC Bank'
+    if (text.includes('karur vysya bank') || text.includes('kvb')) return 'Karur Vysya Bank'
+    if (text.includes('state bank of india') || text.includes('sbi')) return 'State Bank of India'
+    if (text.includes('icici bank')) return 'ICICI Bank'
+    if (text.includes('axis bank')) return 'Axis Bank'
+    if (text.includes('kotak mahindra') || text.includes('kotak')) return 'Kotak Mahindra Bank'
+    if (text.includes('bank of baroda') || text.includes('bob')) return 'Bank of Baroda'
+    if (text.includes('punjab national bank') || text.includes('pnb')) return 'Punjab National Bank'
+    if (text.includes('canara bank')) return 'Canara Bank'
+    if (text.includes('union bank of india')) return 'Union Bank of India'
+    if (text.includes('idbi bank')) return 'IDBI Bank'
+    if (text.includes('indian bank')) return 'Indian Bank'
+  }
+  return null
+}
+
 export function parsePdfTextPages(
   fileName: string,
   fileSize: number,
@@ -617,16 +820,21 @@ export function parsePdfTextPages(
   pageItems: unknown[][],
 ): ParsedStatement {
   const pages: PdfPageText[] = []
-  let activeColumns: PdfTableColumns | null = null
+  let activeColumns: PdfTableColumnBounds | null = null
   for (const items of pageItems) {
     const lines = pdfLineItems(items)
     activeColumns = detectPdfTableColumns(lines) ?? activeColumns
     pages.push({ lines, columns: activeColumns })
   }
   const lines = pages.flatMap((page) => page.lines)
-  const detectedCurrency = detectPdfCurrency(lines)
-  if (pages.some((page) => page.columns)) return parseColumnPdf(fileName, fileSize, id, defaultCurrency, pages, detectedCurrency)
-  return parseUnstructuredPdf(fileName, fileSize, id, defaultCurrency, lines, detectedCurrency)
+  const bankName = detectPdfBankName(lines)
+  const detectedCurrency = detectPdfCurrency(lines, bankName)
+  if (pages.some((page) => page.columns)) {
+    const parsed = parseColumnPdf(fileName, fileSize, id, defaultCurrency, pages, detectedCurrency)
+    return { ...parsed, bankName: bankName ?? undefined }
+  }
+  const parsed = parseUnstructuredPdf(fileName, fileSize, id, defaultCurrency, lines, detectedCurrency)
+  return { ...parsed, bankName: bankName ?? undefined }
 }
 
 async function parsePdf(file: File, id: string, defaultCurrency: string): Promise<ParsedStatement> {

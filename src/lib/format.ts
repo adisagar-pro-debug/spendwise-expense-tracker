@@ -1,14 +1,78 @@
+const currencyLocales: Record<string, string> = {
+  INR: 'en-IN',
+  USD: 'en-US',
+  GBP: 'en-GB',
+  EUR: 'en-IE',
+  CAD: 'en-CA',
+  AUD: 'en-AU',
+  NZD: 'en-NZ',
+  JPY: 'ja-JP',
+  SGD: 'en-SG',
+  HKD: 'en-HK',
+  AED: 'en-AE',
+  CHF: 'de-CH',
+  ZAR: 'en-ZA',
+}
+
+function formatIndianCompact(amount: number): string {
+  const isNegative = amount < 0
+  const abs = Math.abs(amount)
+  let formattedValue: string
+  let suffix = ''
+
+  if (abs >= 10_000_000) {
+    // 1 Crore = 10,000,000 (100 Lakhs)
+    const val = abs / 10_000_000
+    formattedValue = val.toLocaleString('en-IN', {
+      maximumFractionDigits: val < 10 ? 2 : 1,
+      minimumFractionDigits: 0,
+    })
+    suffix = 'Cr'
+  } else if (abs >= 100_000) {
+    // 1 Lakh = 100,000
+    const val = abs / 100_000
+    formattedValue = val.toLocaleString('en-IN', {
+      maximumFractionDigits: val < 10 ? 2 : 1,
+      minimumFractionDigits: 0,
+    })
+    suffix = 'L'
+  } else if (abs >= 1_000) {
+    // Thousand = 1,000
+    const val = abs / 1_000
+    formattedValue = val.toLocaleString('en-IN', {
+      maximumFractionDigits: val < 10 ? 1 : 0,
+      minimumFractionDigits: 0,
+    })
+    suffix = 'K'
+  } else {
+    formattedValue = abs.toLocaleString('en-IN', {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+    })
+  }
+
+  return `${isNegative ? '-' : ''}₹${formattedValue}${suffix}`
+}
+
 export function formatMoney(amount: number, currencyCode = 'USD', compact = false): string {
+  const normalizedCode = (currencyCode || 'USD').toUpperCase().trim()
+
+  if (normalizedCode === 'INR' && compact) {
+    return formatIndianCompact(amount)
+  }
+
+  const locale = currencyLocales[normalizedCode] ?? 'en-US'
+
   try {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat(locale, {
       style: 'currency',
-      currency: currencyCode,
+      currency: normalizedCode,
       notation: compact ? 'compact' : 'standard',
-      maximumFractionDigits: compact ? 1 : 2,
+      maximumFractionDigits: compact ? (normalizedCode === 'INR' ? 2 : 1) : 2,
       minimumFractionDigits: compact ? 0 : 2,
     }).format(amount)
   } catch {
-    return `${currencyCode} ${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+    return `${normalizedCode} ${amount.toLocaleString(locale, { maximumFractionDigits: 2 })}`
   }
 }
 

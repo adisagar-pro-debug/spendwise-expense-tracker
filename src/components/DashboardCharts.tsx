@@ -23,6 +23,7 @@ interface DashboardChartsProps {
   spend: number
   currencyCode: string
   period: string
+  trendSubtitle?: string
   unknownCount: number
   analyzedCount: number
   onCategoryClick: (category: Category) => void
@@ -50,12 +51,12 @@ function formatTooltipAmount(value: number | undefined, currency: string): strin
   return formatMoney(value ?? 0, currency, true)
 }
 
-export default function DashboardCharts({ trendData, categoryData, spend, currencyCode, period, unknownCount, analyzedCount, onCategoryClick, onSeeTransactions, onUpload }: DashboardChartsProps) {
+export default function DashboardCharts({ trendData, categoryData, spend, currencyCode, period, trendSubtitle, unknownCount, analyzedCount, onCategoryClick, onSeeTransactions, onUpload }: DashboardChartsProps) {
   return (
     <section className="analytics-grid">
       <article className="panel spending-panel">
         <div className="panel-heading">
-          <div><div className="section-kicker">CASH FLOW</div><h2>Income & spending</h2><p>Your last six months at a glance</p></div>
+          <div><h2>Income & spending</h2><p>{trendSubtitle ?? 'Monthly cash flow'}</p></div>
           <div className="chart-legend"><span><i className="legend-dot legend-income" />Income</span><span><i className="legend-dot legend-spending" />Spending</span></div>
         </div>
         <div className="chart-wrap">
@@ -66,20 +67,20 @@ export default function DashboardCharts({ trendData, categoryData, spend, curren
                 <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#63b894" stopOpacity={0.22} /><stop offset="95%" stopColor="#63b894" stopOpacity={0.015} /></linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 5" vertical={false} stroke="#e9ede9" />
-              <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#98a19d', fontSize: 11, fontFamily: 'DM Sans' }} dy={10} />
-              <YAxis tickFormatter={(value) => formatTooltipAmount(Number(value), currencyCode)} axisLine={false} tickLine={false} tick={{ fill: '#98a19d', fontSize: 10, fontFamily: 'DM Mono' }} width={51} />
+              <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#78867e', fontSize: 12, fontFamily: 'DM Sans' }} dy={10} />
+              <YAxis tickFormatter={(value) => formatTooltipAmount(Number(value), currencyCode)} axisLine={false} tickLine={false} tick={{ fill: '#78867e', fontSize: 11, fontFamily: 'DM Mono' }} width={56} />
               <Tooltip content={<ChartTooltip currencyCode={currencyCode} />} />
               <Area type="monotone" dataKey="income" name="Income" stroke="#238c6a" strokeWidth={2.3} fill="url(#incomeGradient)" activeDot={{ r: 4, strokeWidth: 2 }} />
               <Area type="monotone" dataKey="spending" name="Spending" stroke="#db8d68" strokeWidth={2.3} fill="url(#spendGradient)" activeDot={{ r: 4, strokeWidth: 2 }} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
-        <div className="chart-footer"><span><i className="chart-footer-mark" /> No duplicates included</span><span>{analyzedCount} analyzed transactions</span></div>
+        <div className="chart-footer"><span>{analyzedCount} transactions</span></div>
       </article>
 
       <article className="panel category-panel">
         <div className="panel-heading">
-          <div><div className="section-kicker">SPENDING BREAKDOWN</div><h2>Where it goes</h2><p>Categories for {period.toLowerCase()}</p></div>
+          <div><h2>Spending breakdown</h2><p>{period}</p></div>
           <button className="panel-menu" onClick={onSeeTransactions} aria-label="See all transactions"><ArrowRight size={15} /></button>
         </div>
         {categoryData.length > 0 ? (
