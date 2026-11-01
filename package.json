@@ -28,11 +28,5 @@
     "typescript": "^5.9.2",
     "vite": "^6.3.5",
     "wrangler": "^4.156.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "workerd"
-    ]
   }
 }
